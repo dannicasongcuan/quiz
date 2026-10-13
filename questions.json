@@ -1,0 +1,48 @@
+{
+  "title": "AI Enablement Quick Quiz",
+  "settings": {
+    "secondsPerQuestion": 20,
+    "basePoints": 500,
+    "speedBonus": 500,
+    "revealWhenAllAnswered": true
+  },
+  "questions": [
+    {
+      "text": "Why is it important to clean up messy data before you use Copilot or any other AI tool?",
+      "options": [
+        "It makes the files smaller",
+        "Good data in, good data out",
+        "Copilot can't open messy files",
+        "It's just good housekeeping – no real impact"
+      ],
+      "correct": 2
+    },
+    {
+      "text": "\"You are a field operations manager with 20 years in metering. Write the site update.\" Which prompt technique is this?",
+      "options": [
+        "Context setting",
+        "Role assignment",
+        "Emotion and tone injection",
+        "Few-shot examples"
+      ],
+      "correct": 2
+    },
+    {
+      "text": "What is the final step before you share a Copilot output?",
+      "options": [
+        "Delete the working files",
+        "A human checks the output and turns it into a decision",
+        "Send everything to your manager",
+        "Save it all to OneDrive"
+      ],
+      "correct": 2,
+      "seconds": 15
+    },
+    {
+      "text": "True or false: a faster answer earns more points, but only if it's correct.",
+      "options": ["True", "False"],
+      "correct": 1,
+      "seconds": 10
+    }
+  ]
+}

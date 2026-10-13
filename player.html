@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Join the quiz</title>
+<style>
+  :root { --bg:#2d1b4e; --card:#fff; --ink:#1d1d2b; --muted:#6b6b80; --good:#1f9d55; --bad:#d64545; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; font-family:"Segoe UI",system-ui,sans-serif; background:linear-gradient(160deg,#2d1b4e,#4b2a7b); color:var(--ink); display:flex; justify-content:center; }
+  main { width:100%; max-width:560px; padding:20px 16px 32px; }
+  .card { background:var(--card); border-radius:16px; padding:22px; box-shadow:0 8px 24px rgba(0,0,0,.25); text-align:center; }
+  h1 { font-size:1.4rem; margin:0 0 8px; } h2 { font-size:1.15rem; margin:0 0 14px; line-height:1.35; }
+  p { color:var(--muted); margin:6px 0; }
+  input { width:100%; font-size:1.15rem; padding:14px; border:2px solid #ddd; border-radius:10px; margin:14px 0; }
+  .btn { width:100%; font-size:1.1rem; font-weight:600; padding:14px; border:0; border-radius:10px; background:#4b2a7b; color:#fff; cursor:pointer; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:14px; }
+  .opt { min-height:96px; border:0; border-radius:14px; color:#fff; font-size:1.02rem; font-weight:600; padding:12px; cursor:pointer; display:flex; align-items:center; gap:8px; text-align:left; box-shadow:0 4px 0 rgba(0,0,0,.2); }
+  .opt:active { transform:translateY(2px); box-shadow:none; }
+  .opt[disabled] { opacity:.35; cursor:default; }
+  .shape { font-size:1.4rem; }
+  .bar { display:flex; justify-content:space-between; color:#fff; font-weight:600; margin-bottom:12px; }
+  .timer { font-size:2.4rem; font-weight:800; color:#4b2a7b; }
+  .big { font-size:3rem; margin:6px 0; }
+  .good { color:var(--good); } .bad { color:var(--bad); }
+  .pill { display:inline-block; background:#f1ecfa; color:#4b2a7b; border-radius:999px; padding:6px 14px; margin:4px; font-weight:600; }
+  ol { text-align:left; padding-left:24px; } li { padding:4px 0; } .meRow { font-weight:700; color:#4b2a7b; }
+  .err { color:var(--bad); min-height:1.2em; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+const COLORS = ['#e21b3c', '#1368ce', '#d89e00', '#26890c', '#864cbf', '#0a8f8f'];
+const SHAPES = ['▲', '◆', '●', '■', '★', '⬢'];
+const app = document.getElementById('app');
+let me = JSON.parse(localStorage.getItem('liveQuizPlayer') || 'null');
+let state = null, es = null, endsAt = 0, ticker = null, lastKey = '', pendingChoice = null;
+
+// Small DOM helper – uses text nodes so names/questions can't inject HTML
+function h(tag, attrs = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') el.className = v;
+    else if (k === 'style') el.style.cssText = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) el.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c != null && c !== false) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return el;
+}
+const ordinal = (n) => n + (['th','st','nd','rd'][(n % 100 - 20) % 10] || ['th','st','nd','rd'][n % 100] || 'th');
+
+function connect() {
+  if (es) es.close();
+  es = new EventSource('/events?role=player&id=' + encodeURIComponent(me.id));
+  es.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.unknownPlayer) { localStorage.removeItem('liveQuizPlayer'); me = null; es.close(); return renderJoin(); }
+    state = data;
+    if (state.question) endsAt = Date.now() + state.question.remainingMs;
+    render();
+  };
+}
+
+function renderJoin(error = '') {
+  clearInterval(ticker); lastKey = '';
+  const input = h('input', { placeholder: 'Your name', maxlength: 30, autocomplete: 'off' });
+  const err = h('p', { class: 'err' }, error);
+  const join = async () => {
+    const name = input.value.trim();
+    if (!name) { err.textContent = 'Please enter your name.'; return; }
+    const r = await fetch('/api/join', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+    const d = await r.json();
+    if (!r.ok) { err.textContent = d.error; return; }
+    me = d; localStorage.setItem('liveQuizPlayer', JSON.stringify(me)); connect();
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
+  app.replaceChildren(h('div', { class: 'card' },
+    h('h1', {}, 'Join the quiz'),
+    h('p', {}, 'Use the name you want shown on the leaderboard.'),
+    input, h('button', { class: 'btn', onclick: join }, "Let's go"), err));
+  input.focus();
+}
+
+async function answer(choice) {
+  if (pendingChoice != null) return;
+  pendingChoice = choice;
+  document.querySelectorAll('.opt').forEach((b) => (b.disabled = true));
+  const r = await fetch('/api/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: me.id, choice }) });
+  const d = await r.json();
+  if (!r.ok) { const e = document.getElementById('err'); if (e) e.textContent = d.error; }
+}
+
+function header() {
+  return h('div', { class: 'bar' }, h('span', {}, state.me.name), h('span', {}, `${state.me.score} pts`));
+}
+
+function render() {
+  // Only redraw when something relevant to this player changes (keeps taps responsive)
+  const key = JSON.stringify([state.phase, state.qNumber, state.myAnswer, state.me, state.top]);
+  if (key === lastKey) return;
+  lastKey = key;
+  clearInterval(ticker);
+  if (state.phase !== 'question') pendingChoice = null;
+  const s = state;
+
+  if (s.phase === 'lobby') {
+    return app.replaceChildren(header(), h('div', { class: 'card' },
+      h('div', { class: 'big' }, '🎉'), h('h1', {}, `You're in, ${s.me.name}!`),
+      h('p', {}, 'Watch the main screen – the quiz starts soon.'),
+      h('p', {}, 'Faster correct answers earn more points.')));
+  }
+
+  if (s.phase === 'question') {
+    const q = s.question;
+    if (s.myAnswer) {
+      return app.replaceChildren(header(), h('div', { class: 'card' },
+        h('div', { class: 'big' }, '🔒'), h('h1', {}, 'Answer locked in'),
+        h('p', {}, `You answered in ${s.myAnswer.secs.toFixed(2)}s`), h('p', {}, 'Waiting for the reveal…')));
+    }
+    pendingChoice = null;
+    const timerEl = h('div', { class: 'timer' });
+    const tick = () => { timerEl.textContent = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)); };
+    tick(); ticker = setInterval(tick, 200);
+    const grid = h('div', { class: 'grid' }, q.options.map((o, i) =>
+      h('button', { class: 'opt', style: `background:${COLORS[i]}`, onclick: () => answer(i) }, h('span', { class: 'shape' }, SHAPES[i]), h('span', {}, o))));
+    return app.replaceChildren(header(), h('div', { class: 'card' },
+      h('p', {}, `Question ${s.qNumber} of ${s.qTotal}`), timerEl, h('h2', {}, q.text), grid, h('p', { id: 'err', class: 'err' })));
+  }
+
+  if (s.phase === 'reveal') {
+    const a = s.myAnswer, q = s.question;
+    let body;
+    if (!a) body = [h('div', { class: 'big' }, '⏰'), h('h1', { class: 'bad' }, 'No answer this time')];
+    else if (a.correct) body = [h('div', { class: 'big' }, '✅'), h('h1', { class: 'good' }, `Correct! +${a.points}`),
+      h('p', {}, `${a.secs.toFixed(2)}s – ${ordinal(a.speedRank)} fastest correct answer`)];
+    else body = [h('div', { class: 'big' }, '❌'), h('h1', { class: 'bad' }, 'Not quite'), h('p', {}, `You answered in ${a.secs.toFixed(2)}s`)];
+    return app.replaceChildren(header(), h('div', { class: 'card' }, ...body,
+      h('p', {}, 'Correct answer: ', h('strong', {}, q.options[q.correct])),
+      h('span', { class: 'pill' }, `You're ${ordinal(s.me.rank)} of ${s.playerCount}`)));
+  }
+
+  if (s.phase === 'leaderboard' || s.phase === 'finished') {
+    const done = s.phase === 'finished';
+    return app.replaceChildren(header(), h('div', { class: 'card' },
+      h('div', { class: 'big' }, done ? (s.me.rank <= 3 ? ['🥇','🥈','🥉'][s.me.rank - 1] : '🏁') : '📊'),
+      h('h1', {}, done ? `You finished ${ordinal(s.me.rank)}!` : `You're ${ordinal(s.me.rank)}`),
+      h('p', {}, `${s.me.score} points · ${s.me.correct} correct · ${s.me.wins} fastest-finger win${s.me.wins === 1 ? '' : 's'}`),
+      h('ol', {}, s.top.map((t) => h('li', { class: t.name === s.me.name ? 'meRow' : '' }, `${t.name} – ${t.score}`))),
+      done ? h('p', {}, 'Thanks for playing!') : h('p', {}, 'Next question coming up…')));
+  }
+}
+
+if (me) connect(); else renderJoin();
+</script>
+</body>
+</html>

@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quiz host</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; font-family:"Segoe UI",system-ui,sans-serif; background:linear-gradient(160deg,#2d1b4e,#4b2a7b); color:#fff; display:flex; flex-direction:column; }
+  main { flex:1; padding:28px 40px; max-width:1300px; width:100%; margin:0 auto; }
+  h1 { font-size:2.2rem; margin:0 0 10px; } h2 { font-size:2rem; line-height:1.3; margin:10px 0 24px; }
+  .muted { color:#cfc3e6; }
+  .card { background:#fff; color:#1d1d2b; border-radius:18px; padding:24px; }
+  .lobby { display:grid; grid-template-columns:auto 1fr; gap:32px; align-items:center; }
+  .url { font-size:2.4rem; font-weight:800; word-break:break-all; color:#4b2a7b; }
+  #qr { background:#fff; padding:14px; border-radius:14px; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
+  .chip { background:#f1ecfa; color:#4b2a7b; padding:6px 14px; border-radius:999px; font-weight:600; }
+  .topline { display:flex; justify-content:space-between; align-items:center; font-size:1.2rem; }
+  .timer { font-size:3.4rem; font-weight:800; }
+  .track { height:10px; background:rgba(255,255,255,.2); border-radius:6px; overflow:hidden; margin:8px 0 18px; }
+  .fill { height:100%; background:#ffd34d; }
+  .opts { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .opt { border-radius:14px; padding:18px 20px; font-size:1.4rem; font-weight:600; display:flex; align-items:center; gap:12px; position:relative; overflow:hidden; min-height:84px; }
+  .opt .count { margin-left:auto; font-size:1.6rem; font-weight:800; z-index:1; }
+  .opt .lbl { z-index:1; } .opt .shape { z-index:1; }
+  .opt .barbg { position:absolute; inset:0; background:rgba(255,255,255,.18); transform-origin:left; }
+  .dim { opacity:.35; } .right { outline:5px solid #fff; }
+  .cols { display:grid; grid-template-columns:1.2fr 1fr; gap:24px; margin-top:24px; }
+  table { width:100%; border-collapse:collapse; font-size:1.1rem; }
+  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid #eee; } th { color:#6b6b80; font-weight:600; font-size:.95rem; }
+  td.num, th.num { text-align:right; }
+  .podium { display:flex; justify-content:center; align-items:flex-end; gap:18px; margin:20px 0 28px; }
+  .step { background:#fff; color:#1d1d2b; border-radius:14px 14px 0 0; width:220px; text-align:center; padding:16px; }
+  .step .medal { font-size:2.6rem; } .step .nm { font-weight:800; font-size:1.3rem; }
+  .awards { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-bottom:24px; }
+  .award { background:rgba(255,255,255,.12); border-radius:14px; padding:16px; } .award b { display:block; font-size:1.3rem; margin-top:4px; }
+  footer { background:rgba(0,0,0,.25); padding:12px 40px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  button { font:inherit; font-weight:600; border:0; border-radius:10px; padding:11px 18px; cursor:pointer; background:#fff; color:#4b2a7b; }
+  button.primary { background:#ffd34d; color:#2d1b4e; font-size:1.1rem; }
+  button.ghost { background:transparent; color:#fff; border:1px solid rgba(255,255,255,.4); }
+  .spacer { flex:1; }
+  .login { max-width:420px; margin:12vh auto; }
+  input { width:100%; font-size:1.1rem; padding:12px; border:2px solid #ddd; border-radius:10px; margin:12px 0; }
+  .err { color:#d64545; min-height:1.2em; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<footer id="controls" hidden></footer>
+<script>
+const COLORS = ['#e21b3c', '#1368ce', '#d89e00', '#26890c', '#864cbf', '#0a8f8f'];
+const SHAPES = ['▲', '◆', '●', '■', '★', '⬢'];
+const app = document.getElementById('app'), controls = document.getElementById('controls');
+let key = sessionStorage.getItem('liveQuizHostKey') || '';
+let state = null, es = null, endsAt = 0, ticker = null;
+
+function h(tag, attrs = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') el.className = v;
+    else if (k === 'style') el.style.cssText = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) el.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c != null && c !== false) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return el;
+}
+
+async function act(action) {
+  const r = await fetch('/api/host/' + action, { method: 'POST', headers: { 'x-host-key': key } });
+  if (!r.ok) { const d = await r.json().catch(() => ({})); alert(d.error || 'Something went wrong'); }
+}
+function download(file) { window.location.href = `/api/export/${file}?key=${encodeURIComponent(key)}`; }
+
+function renderLogin(error = '') {
+  const input = h('input', { type: 'password', placeholder: 'Host key' });
+  const go = async () => {
+    key = input.value;
+    const r = await fetch('/api/host/check', { method: 'POST', headers: { 'x-host-key': key } });
+    if (!r.ok) return renderLogin('That host key is not right.');
+    sessionStorage.setItem('liveQuizHostKey', key); connect();
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  app.replaceChildren(h('div', { class: 'card login' }, h('h1', {}, 'Host login'),
+    h('p', {}, 'Enter the host key shown when you started the server.'), input,
+    h('button', { class: 'primary', onclick: go, style: 'width:100%' }, 'Open host screen'), h('p', { class: 'err' }, error)));
+  input.focus();
+}
+
+function connect() {
+  if (es) es.close();
+  es = new EventSource('/events?role=host&key=' + encodeURIComponent(key));
+  es.onmessage = (e) => { state = JSON.parse(e.data); if (state.question) endsAt = Date.now() + state.question.remainingMs; render(); };
+  es.onerror = async () => {
+    const r = await fetch('/api/host/check', { method: 'POST', headers: { 'x-host-key': key } }).catch(() => null);
+    if (r && r.status === 401) { es.close(); sessionStorage.removeItem('liveQuizHostKey'); renderLogin('Please enter the host key.'); }
+  };
+}
+
+function renderControls() {
+  const s = state, btns = [];
+  const nextLabel = s.isLast ? 'Final results 🏁' : (s.qNumber === 0 ? 'Start quiz ▶' : 'Next question ▶');
+  if (s.phase === 'lobby') btns.push(h('button', { class: 'primary', onclick: () => act('next') }, 'Start quiz ▶'));
+  if (s.phase === 'question') btns.push(h('button', { class: 'primary', onclick: () => act('reveal') }, 'Reveal answer'));
+  if (s.phase === 'reveal') btns.push(h('button', { onclick: () => act('leaderboard') }, 'Show leaderboard'), h('button', { class: 'primary', onclick: () => act('next') }, nextLabel));
+  if (s.phase === 'leaderboard') btns.push(h('button', { class: 'primary', onclick: () => act('next') }, nextLabel));
+  btns.push(h('span', { class: 'spacer' }));
+  if (s.phase !== 'lobby' && s.phase !== 'finished') btns.push(h('button', { class: 'ghost', onclick: () => confirm('End the quiz now and show final results?') && act('finish') }, 'End quiz'));
+  btns.push(h('button', { class: 'ghost', onclick: () => download('responses.csv') }, '⬇ Responses CSV'),
+    h('button', { class: 'ghost', onclick: () => download('leaderboard.csv') }, '⬇ Leaderboard CSV'),
+    h('button', { class: 'ghost', onclick: () => confirm('Reset clears all players and scores. Export first if you need the results. Continue?') && act('reset') }, 'Reset'));
+  controls.hidden = false; controls.replaceChildren(...btns);
+}
+
+function lbTable(rows, limit) {
+  return h('table', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, 'Name'), h('th', { class: 'num' }, 'Points'), h('th', { class: 'num' }, 'Correct'), h('th', { class: 'num' }, '⚡ Fastest wins'), h('th', { class: 'num' }, 'Avg time (correct)')),
+    rows.slice(0, limit).map((p) => h('tr', {}, h('td', {}, p.rank), h('td', {}, p.name), h('td', { class: 'num' }, p.score), h('td', { class: 'num' }, p.correct),
+      h('td', { class: 'num' }, p.wins), h('td', { class: 'num' }, p.avgCorrectSecs == null ? '–' : p.avgCorrectSecs.toFixed(2) + 's'))));
+}
+
+function optionTiles(q, stats) {
+  const max = stats ? Math.max(1, ...stats.counts) : 1;
+  return h('div', { class: 'opts' }, q.options.map((o, i) => {
+    const isRight = stats && i === q.correct;
+    return h('div', { class: 'opt' + (stats ? (isRight ? ' right' : ' dim') : ''), style: `background:${COLORS[i]}` },
+      stats ? h('div', { class: 'barbg', style: `transform:scaleX(${stats.counts[i] / max})` }) : null,
+      h('span', { class: 'shape' }, SHAPES[i]), h('span', { class: 'lbl' }, o + (isRight ? '  ✓' : '')),
+      stats ? h('span', { class: 'count' }, stats.counts[i]) : null);
+  }));
+}
+
+function render() {
+  clearInterval(ticker);
+  renderControls();
+  const s = state;
+
+  if (s.phase === 'lobby') {
+    const qr = h('div', { id: 'qr' });
+    app.replaceChildren(h('h1', {}, s.title),
+      h('div', { class: 'card lobby' }, qr, h('div', {},
+        h('p', { style: 'margin:0;color:#6b6b80;font-size:1.2rem' }, 'Scan the code or go to'),
+        h('div', { class: 'url' }, s.joinUrl),
+        h('p', { style: 'color:#6b6b80;font-size:1.1rem' }, `${s.playerCount} joined · ${s.qTotal} questions · faster correct answers score more`),
+        h('div', { class: 'chips' }, s.players.map((n) => h('span', { class: 'chip' }, n))))));
+    if (window.QRCode) new QRCode(qr, { text: s.joinUrl, width: 240, height: 240 });
+    else qr.remove();
+    return;
+  }
+
+  if (s.phase === 'question') {
+    const q = s.question;
+    const timerEl = h('div', { class: 'timer' }), fill = h('div', { class: 'fill' });
+    const tick = () => {
+      const left = Math.max(0, endsAt - Date.now());
+      timerEl.textContent = Math.ceil(left / 1000);
+      fill.style.width = (left / (q.seconds * 1000)) * 100 + '%';
+    };
+    tick(); ticker = setInterval(tick, 100);
+    return app.replaceChildren(
+      h('div', { class: 'topline' }, h('span', { class: 'muted' }, `Question ${s.qNumber} of ${s.qTotal}`), timerEl, h('span', {}, `${s.answered} / ${s.playerCount} answered`)),
+      h('div', { class: 'track' }, fill), h('h2', {}, q.text), optionTiles(q));
+  }
+
+  if (s.phase === 'reveal') {
+    const q = s.question, st = s.stats;
+    const pct = st.answered ? Math.round((st.correctCount / st.answered) * 100) : 0;
+    return app.replaceChildren(
+      h('div', { class: 'topline' }, h('span', { class: 'muted' }, `Question ${s.qNumber} of ${s.qTotal}`), h('span', {}, `${st.correctCount} of ${st.answered} correct (${pct}%)`)),
+      h('h2', {}, q.text), optionTiles(q, st),
+      h('div', { class: 'cols' },
+        h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, '⚡ Fastest correct answers'),
+          st.fastest.length ? h('table', {}, st.fastest.map((f, i) => h('tr', {}, h('td', {}, ['🥇','🥈','🥉','4','5'][i]), h('td', {}, f.name), h('td', { class: 'num' }, f.secs.toFixed(2) + 's'), h('td', { class: 'num' }, '+' + f.points))))
+            : h('p', {}, 'No correct answers this round.')),
+        h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Top 5 overall'), lbTable(s.leaderboard, 5))));
+  }
+
+  if (s.phase === 'leaderboard') {
+    return app.replaceChildren(h('h1', {}, `Leaderboard after ${s.summary.length} of ${s.qTotal}`), h('div', { class: 'card' }, lbTable(s.leaderboard, 10)));
+  }
+
+  if (s.phase === 'finished') {
+    const lb = s.leaderboard, a = s.awards;
+    const order = [1, 0, 2].filter((i) => lb[i]);
+    const heights = { 0: 190, 1: 150, 2: 120 };
+    const award = (title, value) => h('div', { class: 'award' }, title, h('b', {}, value || '–'));
+    return app.replaceChildren(h('h1', { style: 'text-align:center' }, `🏁 ${s.title} – final results`),
+      h('div', { class: 'podium' }, order.map((i) => h('div', { class: 'step', style: `height:${heights[i]}px` },
+        h('div', { class: 'medal' }, ['🥇','🥈','🥉'][i]), h('div', { class: 'nm' }, lb[i].name), h('div', {}, `${lb[i].score} pts`)))),
+      h('div', { class: 'awards' },
+        award('⚡ Fastest single correct answer', a.fastestSingle && `${a.fastestSingle.name} – ${a.fastestSingle.secs.toFixed(2)}s (Q${a.fastestSingle.q})`),
+        award('🏎️ Most fastest-finger wins', a.mostFastestFinger && `${a.mostFastestFinger.name} – ${a.mostFastestFinger.wins} question${a.mostFastestFinger.wins === 1 ? '' : 's'}`),
+        award('⏱ Quickest average (correct answers)', a.quickestAverage && `${a.quickestAverage.name} – ${a.quickestAverage.secs.toFixed(2)}s`)),
+      h('div', { class: 'cols', style: 'margin-top:0' },
+        h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Full leaderboard'), lbTable(lb, 50)),
+        h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Question by question'),
+          h('table', {}, h('tr', {}, h('th', {}, 'Q'), h('th', { class: 'num' }, '% correct'), h('th', {}, 'Fastest correct')),
+            s.summary.map((q) => h('tr', {}, h('td', { title: q.text }, q.n), h('td', { class: 'num' }, q.pctCorrect + '%'),
+              h('td', {}, q.fastest ? `${q.fastest.name} (${q.fastest.secs.toFixed(2)}s)` : '–')))))));
+  }
+}
+
+if (key) connect(); else renderLogin();
+</script>
+</body>
+</html>
